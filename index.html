@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>test application</title>
+
+  <style>
+    body {
+      background-color: #222222;
+      color: white;
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    #msg {
+      width: 50ch;
+    }
+
+    div {
+      margin-bottom: 10px;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>test application</h1>
+  <blockquote>It may take a few seconds for messages to load.</blockquote>
+
+  <hr />
+  <div id="chat">Loading...</div>
+  <hr />
+
+  <input id="msg" placeholder="Message..." />
+  <button id="msgBtn" onclick="pressSend()" disabled>send message</button>
+  <br />
+  <div id="lastMsg">Last Received: N/A</div>
+
+  <script>
+    const chat = document.getElementById("chat");
+    const lastMsg = document.getElementById("lastMsg");
+    const msg = document.getElementById("msg");
+    const obj = document.getElementById("obj");
+    const msgBtn = document.getElementById("msgBtn")
+    const password = location.hash.slice(1);
+    const API = "https://script.google.com/macros/s/AKfycbwDiZ0mUEAUKQf5Fik8NwLPEtnyma_wxyigA4kYYLqw5JabpmLUSssV5JwnhaQQYbZ_uw/exec";
+    let last = "";
+
+    async function aesEncrypt(text) {
+      const enc = new TextEncoder();
+      const key = await crypto.subtle.digest("SHA-256", enc.encode(password));
+      const cryptoKey = await crypto.subtle.importKey("raw", key, "AES-GCM", false, ["encrypt"]);
+
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, cryptoKey, enc.encode(text));
+
+      return btoa(JSON.stringify({ iv: Array.from(iv), data: Array.from(new Uint8Array(encrypted)) }));
+    }
+
+    async function aesDecrypt(encoded) {
+      const { iv, data } = JSON.parse(atob(encoded));
+      const enc = new TextEncoder();
+      const key = await crypto.subtle.digest("SHA-256", enc.encode(password));
+      const cryptoKey = await crypto.subtle.importKey("raw", key, "AES-GCM", false, ["decrypt"]);
+
+      const decrypted = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: new Uint8Array(iv) },
+        cryptoKey,
+        new Uint8Array(data)
+      );
+
+      msgBtn.disabled = false;
+
+      return new TextDecoder().decode(decrypted);
+    }
+
+    (async function mainLoop() {
+      try {
+        const text = await (await fetch(API, {
+          method: "GET"
+        })).text();
+
+        if (text != last) {
+          const lines = text.split("\n").slice(-50);
+
+          const html = await Promise.all(
+            lines.map(async line => {
+              const [user, ...rest] = line.split(";");
+              const message = rest.join(";");
+              let decrypted = await aesDecrypt(message);
+
+              decrypted = decrypted.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+              return `<div>${user}: <msg>${decrypted}</msg></div>`;
+            })
+          );
+
+          chat.innerHTML = html.join("\n");
+        }
+        last = text;
+
+        const now = new Date();
+        const hours = now.getHours();
+        const minutes = now.getMinutes();
+        const seconds = now.getSeconds();
+
+        lastMsg.innerText = `Last Received: ${hours}:${minutes}:${seconds}`;
+      } catch (e) {
+        chat.innerHTML = "<div>An error has been logged. This is most likely caused due to having the incorrect password. If you have the correct password, try reloading.</div>";
+        console.error(e);
+      }
+
+      mainLoop();
+    })();
+
+    async function pressSend() {
+      if (msg.value) {
+        fetch(API, {
+          method: "POST",
+          contentType: "application/json",
+          body: JSON.stringify({
+            text: await aesEncrypt(msg.value),
+            name: "guest"
+          })
+        });
+      }
+      msg.value = "";
+    }
+    msg.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        msgBtn.click()
+      }
+    })
+  </script>
+</body>
+
+</html>
